@@ -1,0 +1,2 @@
+# go-logrotate
+go-logrotate
