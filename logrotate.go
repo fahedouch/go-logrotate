@@ -1,23 +1,22 @@
+// Package go_logrotate
+// logrotate.go micmics https://github.com/natefinch/lumberjack/blob/v2.0/lumberjack.go
+
 package go_logrotate
 
 import (
 	"compress/gzip"
-	"errors"
 	"fmt"
+	"github.com/djherbis/times"
 	"io"
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
-	backupTimeFormat = "2006-01-02T15-04-05.000"
-	compressSuffix   = ".gz"
-	defaultMaxSize   = 100
+	compressSuffix = ".gz"
+	defaultMaxSize = 100
 )
 
 // ensure we always implement io.WriteCloser
@@ -26,44 +25,52 @@ var _ io.WriteCloser = (*Logger)(nil)
 // Logger is an io.WriteCloser that writes to the specified filename.
 //
 // Logger opens or creates the logfile on first Write.  If the file exists and
-// is less than MaxSize megabytes, lumberjack will open and append to that file.
-// If the file exists and its size is >= MaxSize megabytes, the file is renamed
-// by putting the current time in a timestamp in the name immediately before the
-// file's extension (or the end of the filename if there's no extension). A new
-// log file is then created using original filename.
+// is less than MaxBytes, logrotate will open and append to that file.
+// If the file exists and its size is >= MaxBytes, the file is renamed
+// by putting an incremental number after the file's extension or at the end
+// of the filename if there's no extension. A new log file is then created using
+// original filename.
 //
-// Whenever a write would cause the current log file exceed MaxSize megabytes,
+// Whenever a write would cause the current log file exceed MaxBytes,
 // the current file is closed, renamed, and a new log file created with the
 // original name. Thus, the filename you give Logger is always the "current" log
 // file.
 //
-// Backups use the log file name given to Logger, in the form
-// `name-timestamp.ext` where name is the filename without the extension,
-// timestamp is the time at which the log was rotated formatted with the
+// Backups uses the log file name given to Logger, in the form
+// `name.ext.num` or `name-timestamp.ext` where name is the filename without the extension,
+// timestamp is the birth time at which the log was rotated formatted with the
 // time.Time format of `2006-01-02T15-04-05.000` and the extension is the
-// original extension.  For example, if your Logger.Filename is
-// `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
+// original extension.
+// if Logger.FilenameTimeFormat is not empty the backup name format is `name-timestamp.ext`
+// if Logger.FilenameTimeFormat is empty the backup name format is `name.ext.num`
+// For example, if your Logger.Filename is `/var/log/foo/server.log` and Logger.FilenameTimeFormat
+// is not empty, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
 // Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
-// recent files according to the encoded timestamp will be retained, up to a
+// recent files according to their birth time will be retained, up to a
 // number equal to MaxBackups (or all of them if MaxBackups is 0).  Any files
-// with an encoded timestamp older than MaxAge days are deleted, regardless of
-// MaxBackups.  Note that the time encoded in the timestamp is the rotation
+// birth time older than MaxAge days are deleted, regardless of
+// MaxBackups.Note that the file's birth time is the rotation
 // time, which may differ from the last time that file was written to.
 //
 // If MaxBackups and MaxAge are both 0, no old log files will be deleted.
 type Logger struct {
 	// Filename is the file to write logs to.  Backup log files will be retained
-	// in the same directory.  It uses <processname>-lumberjack.log in
+	// in the same directory.  It uses <processname>.log in
 	// os.TempDir() if empty.
 	Filename string `json:"filename" yaml:"filename"`
 
-	// MaxSize is the maximum size in megabytes of the log file before it gets
-	// rotated. It defaults to 100 megabytes.
-	MaxSize int `json:"maxsize" yaml:"maxsize"`
+	// FilenameTimeFormat determines whether the rotated log file name contains
+	// timestamp or not and defines its format. It doesn't contain timestamp if empty.
+	// (e.g `2006-01-02T15-04-05.000`)
+	FilenameTimeFormat string `json:"filenameTimeFormat" yaml:"filenameTimeFormat"`
+
+	// MaxBytes is the maximum size in bytes of the log file before it gets
+	// rotated. It defaults to 104857600 (100 megabytes).
+	MaxBytes int64 `json:"maxbytes" yaml:"maxbytes"`
 
 	// MaxAge is the maximum number of days to retain old log files based on the
 	// timestamp encoded in their filename.  Note that a day is defined as 24
@@ -108,17 +115,16 @@ var (
 )
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
-// than MaxSize, the file is closed, renamed to include a timestamp of the
-// current time, and a new log file is created using the original log file name.
-// If the length of the write is greater than MaxSize, an error is returned.
+// than MaxBytes, the file is closed, renamed and a new log file is created using the original log file name.
+// If the length of the write is greater than MaxBytes, an error is returned.
 func (l *Logger) Write(p []byte) (n int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	writeLen := int64(len(p))
-	if writeLen > l.max() {
+	if writeLen > l.max(writeLen) {
 		return 0, fmt.Errorf(
-			"write length %d exceeds maximum file size %d", writeLen, l.max(),
+			"write length %d exceeds maximum file size %d", writeLen, l.max(writeLen),
 		)
 	}
 
@@ -128,7 +134,7 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 		}
 	}
 
-	if l.size+writeLen > l.max() {
+	if l.size+writeLen > l.max(writeLen) {
 		if err := l.rotate(); err != nil {
 			return 0, err
 		}
@@ -168,9 +174,9 @@ func (l *Logger) Rotate() error {
 	return l.rotate()
 }
 
-// rotate closes the current file, moves it aside with a timestamp in the name,
-// (if it exists), opens a new file with the original filename, and then runs
-// post-rotation processing and removal.
+// rotate closes the current file, moves it aside with either a timestamp
+// in the name or number at the end of the name, (if it exists),
+// opens a new file with the original filename, and then runs post-rotation processing and removal.
 func (l *Logger) rotate() error {
 	if err := l.close(); err != nil {
 		return err
@@ -197,7 +203,7 @@ func (l *Logger) openNew() error {
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
 		// move the existing file
-		newname := backupName(name, l.LocalTime)
+		newname := backupName(name, l.FilenameTimeFormat, l.LocalTime)
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
@@ -220,26 +226,35 @@ func (l *Logger) openNew() error {
 	return nil
 }
 
-// backupName creates a new filename from the given name, inserting a timestamp
-// between the filename and the extension, using the local time if requested
-// (otherwise UTC).
-func backupName(name string, local bool) string {
+// backupName creates a new filename
+func backupName(name, nameTimeFormat string, local bool) (string, error) {
 	dir := filepath.Dir(name)
-	filename := filepath.Base(name)
-	ext := filepath.Ext(filename)
-	prefix := filename[:len(filename)-len(ext)]
-	t := currentTime()
-	if !local {
-		t = t.UTC()
+	base := filepath.Base(name)
+	ext := filepath.Ext(base)
+	prefix := base[:len(base)-len(ext)]
+	var filename string
+	filename = fmt.Sprintf("%s%s", prefix, ext)
+	if nameTimeFormat != "" {
+		t := currentTime()
+		if !local {
+			t = t.UTC()
+		}
+		timestamp := t.Format(nameTimeFormat)
+		filename = fmt.Sprintf("%s-%s%s", prefix, timestamp, ext)
+	} else {
+		logFiles, err := os.ReadDir(dir)
+		if err != nil {
+			return "", err
+		}
+		filename = fmt.Sprintf("%s%s%d", prefix, ext, len(logFiles))
 	}
 
-	timestamp := t.Format(backupTimeFormat)
-	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
+	return filepath.Join(dir, filename), nil
 }
 
 // openExistingOrNew opens the logfile if it exists and if the current write
-// would not put it over MaxSize.  If there is no such file or the write would
-// put it over the MaxSize, a new file is created.
+// would not put it over MaxBytes.  If there is no such file or the write would
+// put it over the MaxBytes, a new file is created.
 func (l *Logger) openExistingOrNew(writeLen int) error {
 	l.mill()
 
@@ -252,7 +267,7 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 		return fmt.Errorf("error getting log file info: %s", err)
 	}
 
-	if info.Size()+int64(writeLen) >= l.max() {
+	if info.Size()+int64(writeLen) >= l.max(int64(writeLen)) {
 		return l.rotate()
 	}
 
@@ -267,12 +282,12 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 	return nil
 }
 
-// filename generates the name of the logfile from the current time.
+// filename generates the name of the logfile.
 func (l *Logger) filename() string {
 	if l.Filename != "" {
 		return l.Filename
 	}
-	name := filepath.Base(os.Args[0]) + "-lumberjack.log"
+	name := filepath.Base(os.Args[0]) + ".log"
 	return filepath.Join(os.TempDir(), name)
 }
 
@@ -375,71 +390,45 @@ func (l *Logger) mill() {
 }
 
 // oldLogFiles returns the list of backup log files stored in the same
-// directory as the current log file, sorted by ModTime
+// directory as the current log file, sorted by bTime
 func (l *Logger) oldLogFiles() ([]logInfo, error) {
-	files, err := ioutil.ReadDir(l.dir())
+	files, err := os.ReadDir(l.dir())
 	if err != nil {
 		return nil, fmt.Errorf("can't read log file directory: %s", err)
 	}
 	logFiles := []logInfo{}
 
-	prefix, ext := l.prefixAndExt()
-
 	for _, f := range files {
-		if f.IsDir() {
+		fInFo := os.Stat(f)
+		if fInFo.Mode().IsDir() {
 			continue
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext); err == nil {
-			logFiles = append(logFiles, logInfo{t, f})
-			continue
+		t, err := times.Stat(f)
+		if err != nil {
+			return nil, err
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
-			logFiles = append(logFiles, logInfo{t, f})
-			continue
-		}
-		// error parsing means that the suffix at the end was not generated
-		// by lumberjack, and therefore it's not a backup file.
+		logFiles = append(logFiles, logInfo{t.BirthTime(), f})
 	}
 
-	sort.Sort(byFormatTime(logFiles))
+	sort.Sort(byBirthTime(logFiles))
 
 	return logFiles, nil
 }
 
-// timeFromName extracts the formatted time from the filename by stripping off
-// the filename's prefix and extension. This prevents someone's filename from
-// confusing time.parse.
-func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
-	if !strings.HasPrefix(filename, prefix) {
-		return time.Time{}, errors.New("mismatched prefix")
-	}
-	if !strings.HasSuffix(filename, ext) {
-		return time.Time{}, errors.New("mismatched extension")
-	}
-	ts := filename[len(prefix) : len(filename)-len(ext)]
-	return time.Parse(backupTimeFormat, ts)
-}
-
 // max returns the maximum size in bytes of log files before rolling.
-func (l *Logger) max() int64 {
-	if l.MaxSize == 0 {
-		return int64(defaultMaxSize * megabyte)
+func (l *Logger) max(writeLen int64) int64 {
+	if l.MaxBytes != 0 {
+		if l.MaxBytes == -1 {
+			return writeLen + l.size + 1
+		}
+		return l.MaxBytes
 	}
-	return int64(l.MaxSize) * int64(megabyte)
+	return int64(defaultMaxSize * megabyte)
 }
 
 // dir returns the directory for the current filename.
 func (l *Logger) dir() string {
 	return filepath.Dir(l.filename())
-}
-
-// prefixAndExt returns the filename part and extension part from the Logger's
-// filename.
-func (l *Logger) prefixAndExt() (prefix, ext string) {
-	filename := filepath.Base(l.filename())
-	ext = filepath.Ext(filename)
-	prefix = filename[:len(filename)-len(ext)] + "-"
-	return prefix, ext
 }
 
 // compressLogFile compresses the given log file, removing the
@@ -504,17 +493,17 @@ type logInfo struct {
 	os.FileInfo
 }
 
-// byFormatTime sorts by newest time formatted in the name.
-type byFormatTime []logInfo
+// byBirthTime sorts by newest birth time.
+type byBirthTime []logInfo
 
-func (b byFormatTime) Less(i, j int) bool {
+func (b byBirthTime) Less(i, j int) bool {
 	return b[i].timestamp.After(b[j].timestamp)
 }
 
-func (b byFormatTime) Swap(i, j int) {
+func (b byBirthTime) Swap(i, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 
-func (b byFormatTime) Len() int {
+func (b byBirthTime) Len() int {
 	return len(b)
 }
