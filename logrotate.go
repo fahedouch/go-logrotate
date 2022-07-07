@@ -5,13 +5,17 @@ package go_logrotate
 
 import (
 	"compress/gzip"
+	"errors"
 	"fmt"
-	"github.com/djherbis/times"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/djherbis/times"
 )
 
 const (
@@ -203,7 +207,10 @@ func (l *Logger) openNew() error {
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
 		// move the existing file
-		newname := backupName(name, l.FilenameTimeFormat, l.LocalTime)
+		newname, err := backupName(name, l.FilenameTimeFormat, l.LocalTime)
+		if err != nil {
+			return err
+		}
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
@@ -246,7 +253,7 @@ func backupName(name, nameTimeFormat string, local bool) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		filename = fmt.Sprintf("%s%s%d", prefix, ext, len(logFiles))
+		filename = fmt.Sprintf("%s%s.%d", prefix, ext, len(logFiles))
 	}
 
 	return filepath.Join(dir, filename), nil
@@ -304,7 +311,6 @@ func (l *Logger) millRunOnce() error {
 	if err != nil {
 		return err
 	}
-
 	var compress, remove []logInfo
 
 	if l.MaxBackups > 0 && l.MaxBackups < len(files) {
@@ -398,21 +404,94 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 	}
 	logFiles := []logInfo{}
 
+	prefix, ext := l.prefixAndExt()
+
 	for _, f := range files {
-		fInFo := os.Stat(f)
-		if fInFo.Mode().IsDir() {
+		if f.IsDir() {
 			continue
 		}
-		t, err := times.Stat(f)
+		fInfo, err := f.Info()
 		if err != nil {
 			return nil, err
 		}
-		logFiles = append(logFiles, logInfo{t.BirthTime(), f})
-	}
+		switch {
+		case l.FilenameTimeFormat != "":
+			if t, err := l.timeFromName(f.Name(), prefix, ext); err == nil {
+				logFiles = append(logFiles, logInfo{t, fInfo})
+				continue
+			}
+			if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
+				logFiles = append(logFiles, logInfo{t, fInfo})
+				continue
+			}
+		default:
+			if _, err := l.orderFromName(f.Name(), prefix, ext); err == nil {
+				logInfoTime, err := l.getFileTimeInfo(f.Name())
+				if err != nil {
+					return nil, err
+				}
+				logFiles = append(logFiles, logInfo{logInfoTime, fInfo})
+				continue
+			}
+			if _, err := l.orderFromName(strings.TrimSuffix(f.Name(), compressSuffix), prefix, ext); err == nil {
+				logInfoTime, err := l.getFileTimeInfo(f.Name())
+				if err != nil {
+					return nil, err
+				}
+				logFiles = append(logFiles, logInfo{logInfoTime, fInfo})
+				continue
+			}
+		}
 
+	}
 	sort.Sort(byBirthTime(logFiles))
 
 	return logFiles, nil
+}
+
+// timeFromName extracts the formatted time from the filename by stripping off
+// the filename's prefix and extension. This prevents someone's filename from
+// confusing time.parse.
+func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
+	if !strings.HasPrefix(filename, prefix) {
+		return time.Time{}, errors.New("mismatched prefix")
+	}
+	if !strings.HasSuffix(filename, ext) {
+		return time.Time{}, errors.New("mismatched extension")
+	}
+	ts := filename[len(prefix) : len(filename)-len(ext)]
+	return time.Parse(l.FilenameTimeFormat, ts)
+}
+
+// orderFromName extracts the order from the filename
+func (l *Logger) orderFromName(filename string, prefix, ext string) (string, error) {
+	var order string
+	if filename == prefix {
+		return "", errors.New("mismatched file name")
+	}
+	if !strings.HasPrefix(filename, prefix) {
+		return "", errors.New("mismatched prefix")
+	}
+	if !strings.HasSuffix(filename, ext) {
+		return "", errors.New("mismatched extension")
+	}
+	order = filepath.Ext(filename)
+	return order, nil
+}
+
+// retreive file time informations
+func (l *Logger) getFileTimeInfo(fileName string) (time.Time, error) {
+	t, err := times.Stat(filepath.Join(l.dir(), fileName))
+	if err != nil {
+		return time.Time{}, err
+	}
+	var logInfoTime time.Time
+	if t.HasBirthTime() {
+		logInfoTime = t.BirthTime()
+	} else {
+		logInfoTime = t.ModTime()
+	}
+	return logInfoTime, nil
 }
 
 // max returns the maximum size in bytes of log files before rolling.
@@ -429,6 +508,29 @@ func (l *Logger) max(writeLen int64) int64 {
 // dir returns the directory for the current filename.
 func (l *Logger) dir() string {
 	return filepath.Dir(l.filename())
+}
+
+// prefixAndExt returns the filename part and extension part from the Logger's
+// filename.
+func (l *Logger) prefixAndExt() (string, string) {
+	var prefix, ext string
+	filename := filepath.Base(l.filename())
+	switch {
+	case l.FilenameTimeFormat != "":
+		ext = filepath.Ext(filename)
+		prefix = filename[:len(filename)-len(ext)] + "-"
+	default:
+		// set prefix and ext for Filename to write logs to
+		if filepath.Ext(filename) == ".log" {
+			prefix = filename
+			ext = ""
+		} else {
+			order := filepath.Ext(filename)
+			prefix = strings.TrimSuffix(filename, order)
+			ext = ""
+		}
+	}
+	return prefix, ext
 }
 
 // compressLogFile compresses the given log file, removing the
