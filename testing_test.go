@@ -1,4 +1,4 @@
-package go_logrotate
+package logrotate
 
 import (
 	"fmt"
