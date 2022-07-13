@@ -328,7 +328,7 @@ func (l *Logger) millRunOnce() error {
 		return err
 	}
 	var compress, remove []logInfo
-	
+
 	fofo, _ := os.OpenFile("/tmp/solution3.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	for _, f := range files {
 		if _, err := fofo.Write([]byte(f.Name() + "\n")); err != nil {
@@ -457,14 +457,14 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 				logFiles = append(logFiles, logInfo{logInfoTime, fInfo})
 				continue
 			}
-			if _, err := l.orderFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
+			/*if _, err := l.orderFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
 				logInfoTime, err := l.getFileTimeInfo(f.Name())
 				if err != nil {
 					return nil, err
 				}
 				logFiles = append(logFiles, logInfo{logInfoTime, fInfo})
 				continue
-			}
+			}*/
 		}
 		fofo, _ := os.OpenFile("/tmp/solution2.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if _, err := fofo.Write([]byte(fInfo.Name() + "\n")); err != nil {
