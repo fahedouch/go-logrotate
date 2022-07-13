@@ -328,9 +328,9 @@ func (l *Logger) millRunOnce() error {
 		return err
 	}
 	var compress, remove []logInfo
-
+	
+	fofo, _ := os.OpenFile("/tmp/solution3.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	for _, f := range files {
-		fofo, _ := os.OpenFile("/tmp/solution3.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if _, err := fofo.Write([]byte(f.Name() + "\n")); err != nil {
 			fofo.Close() // ignore error; Write error takes precedence
 		}
