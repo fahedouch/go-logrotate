@@ -332,7 +332,11 @@ func (l *Logger) millRunOnce() error {
 	if l.MaxBackups > 0 && l.MaxBackups < len(files) {
 		preserved := make(map[string]bool)
 		var remaining []logInfo
+		fofo, _ := os.OpenFile("/tmp/solution.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		for _, f := range files {
+			if _, err := fofo.Write([]byte(f.Name() + "\n")); err != nil {
+				fofo.Close() // ignore error; Write error takes precedence
+			}
 			// Only count the uncompressed log file or the
 			// compressed log file, not both.
 			fn := strings.TrimSuffix(f.Name(), compressSuffix)
