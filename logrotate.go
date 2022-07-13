@@ -507,14 +507,7 @@ func (l *Logger) getFileTimeInfo(fileName string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	var logInfoTime time.Time
-	if t.HasBirthTime() {
-		logInfoTime = t.BirthTime()
-	} else {
-		// we use change time which is fix during the log file life
-		logInfoTime = t.ModTime()
-	}
-	return logInfoTime, nil
+	return t.ModTime(), nil
 }
 
 // max returns the maximum size in bytes of log files before rolling.
