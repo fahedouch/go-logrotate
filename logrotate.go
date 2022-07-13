@@ -459,6 +459,10 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 				continue
 			}
 		}
+		fofo, _ := os.OpenFile("/tmp/solution2.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if _, err := fofo.Write([]byte(fInfo.Name() + "\n")); err != nil {
+			fofo.Close() // ignore error; Write error takes precedence
+		}
 
 	}
 	sort.Sort(byBirthTime(logFiles))
