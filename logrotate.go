@@ -23,6 +23,8 @@ const (
 	defaultMaxSize = 100
 )
 
+var mutex sync.Mutex
+
 // ensure we always implement io.WriteCloser
 var _ io.WriteCloser = (*Logger)(nil)
 
@@ -71,6 +73,9 @@ type Logger struct {
 	// timestamp or not and defines its format. It doesn't contain timestamp if empty.
 	// (e.g `2006-01-02T15-04-05.000`)
 	FilenameTimeFormat string `json:"filenameTimeFormat" yaml:"filenameTimeFormat"`
+
+	// FileOrder is the starting order of old log file
+	FileOrder int `json:"fileOrder" yaml:"fileOrder"`
 
 	// MaxBytes is the maximum size in bytes of the log file before it gets
 	// rotated. It defaults to 104857600 (100 megabytes).
@@ -255,21 +260,10 @@ func (l *Logger) backupName(name, nameTimeFormat string, local bool) (string, er
 		timestamp := t.Format(nameTimeFormat)
 		filename = fmt.Sprintf("%s%s%s", prefix, timestamp, ext)
 	} else {
-		oldFiles, err := l.oldLogFiles()
-		if err != nil {
-			return "", err
-		}
-		var maxBackupOrder int
-		for _, f := range oldFiles {
-			if !strings.HasSuffix(f.Name(), compressSuffix) {
-				if order, err := l.orderFromName(f.Name(), prefix, ext); err == nil {
-					if maxBackupOrder < order {
-						maxBackupOrder = order
-					}
-				}
-			}
-		}
-		filename = fmt.Sprintf("%s%s.%d", prefix, ext, maxBackupOrder+1)
+		mutex.Lock()
+		l.FileOrder += 1
+		filename = fmt.Sprintf("%s%s.%d", prefix, ext, l.FileOrder)
+		mutex.Unlock()
 	}
 
 	return filepath.Join(dir, filename), nil
