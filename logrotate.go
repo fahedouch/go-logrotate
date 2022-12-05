@@ -53,7 +53,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // is not empty, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to their birth time will be retained, up to a
@@ -125,16 +125,15 @@ var (
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
 // than MaxBytes, the file is closed, renamed and a new log file is created using the original log file name.
-// If the length of the write is greater than MaxBytes, an error is returned.
+// If the length of the write is greater than MaxBytes, MaxBytes is set to unlimited.
 func (l *Logger) Write(p []byte) (n int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	writeLen := int64(len(p))
 	if writeLen > l.max(writeLen) {
-		return 0, fmt.Errorf(
-			"write length %d exceeds maximum file size %d", writeLen, l.max(writeLen),
-		)
+		// MaxBytes is set to unlimited
+		l.MaxBytes = -1
 	}
 
 	if l.file == nil {

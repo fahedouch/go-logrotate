@@ -89,12 +89,10 @@ func TestWriteTooLong(t *testing.T) {
 	defer l.Close()
 	b := []byte("booooooooooooooo!")
 	n, err := l.Write(b)
-	notNil(err, t)
-	equals(0, n, t)
-	equals(err.Error(),
-		fmt.Sprintf("write length %d exceeds maximum file size %d", len(b), l.MaxBytes), t)
-	_, err = os.Stat(logFile(dir))
-	assert(os.IsNotExist(err), t, "File exists, but should not have been created")
+	isNil(err, t)
+	equals(len(b), n, t)
+	existsWithContent(logFile(dir), b, t)
+	fileCount(dir, 1, t)
 }
 
 func TestMakeLogDir(t *testing.T) {
