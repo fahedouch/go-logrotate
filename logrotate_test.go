@@ -89,10 +89,12 @@ func TestWriteTooLong(t *testing.T) {
 	defer l.Close()
 	b := []byte("booooooooooooooo!")
 	n, err := l.Write(b)
-	isNil(err, t)
-	equals(len(b), n, t)
-	existsWithContent(logFile(dir), b, t)
-	fileCount(dir, 1, t)
+	notNil(err, t)
+	equals(0, n, t)
+	equals(err.Error(),
+		fmt.Sprintf("write length %d exceeds maximum file size %d", len(b), l.MaxBytes), t)
+	_, err = os.Stat(logFile(dir))
+	assert(os.IsNotExist(err), t, "File exists, but should not have been created")
 }
 
 func TestMakeLogDir(t *testing.T) {
@@ -168,6 +170,7 @@ func TestAutoRotateBackupWithTime(t *testing.T) {
 }
 
 func TestAutoRotateBackupWithOrder(t *testing.T) {
+	currentTime = time.Now
 	dir := makeTempDir("TestAutoRotateBackupWithOrder", t)
 	defer os.RemoveAll(dir)
 
@@ -185,8 +188,6 @@ func TestAutoRotateBackupWithOrder(t *testing.T) {
 	existsWithContent(filename, b, t)
 	fileCount(dir, 1, t)
 
-	newFakeTime()
-
 	b2 := []byte("foooooo!")
 	n, err = l.Write(b2)
 	isNil(err, t)
@@ -203,6 +204,8 @@ func TestAutoRotateBackupWithOrder(t *testing.T) {
 }
 
 func TestFirstWriteRotateBackupWithTime(t *testing.T) {
+	currentTime = fakeTime
+
 	dir := makeTempDir("TestFirstWriteRotateBackupWithTime", t)
 	defer os.RemoveAll(dir)
 
@@ -233,6 +236,7 @@ func TestFirstWriteRotateBackupWithTime(t *testing.T) {
 }
 
 func TestFirstWriteRotateBackupWithOrder(t *testing.T) {
+	currentTime = time.Now
 	dir := makeTempDir("TestFirstWriteRotateBackupWithOrder", t)
 	defer os.RemoveAll(dir)
 
@@ -246,8 +250,6 @@ func TestFirstWriteRotateBackupWithOrder(t *testing.T) {
 	start := []byte("boooooo!")
 	err := os.WriteFile(filename, start, 0600)
 	isNil(err, t)
-
-	newFakeTime()
 
 	// this would make us rotate
 	b := []byte("fooo!")
@@ -313,10 +315,6 @@ func TestMaxBackupsWithTime(t *testing.T) {
 
 	existsWithContent(filename, b3, t)
 
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(time.Millisecond * 10)
-
 	// should only have two files in the dir still
 	fileCount(dir, 2, t)
 
@@ -363,10 +361,6 @@ func TestMaxBackupsWithTime(t *testing.T) {
 	existsWithContent(fourthFilename, b3, t)
 	existsWithContent(fourthFilename+compressSuffix, []byte("compress"), t)
 
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(time.Millisecond * 10)
-
 	// We should have four things in the directory now - the 2 log files, the
 	// not log file, and the directory
 	fileCount(dir, 5, t)
@@ -387,9 +381,9 @@ func TestMaxBackupsWithTime(t *testing.T) {
 }
 
 func TestMaxBackupsWithOrder(t *testing.T) {
-	// TODO fix this test
+	// TODO fix this test when https://github.com/fahedouch/go-logrotate/issues/11 is resolved
 	t.Skip()
-	currentTime = fakeTime
+	currentTime = time.Now
 	dir := makeTempDir("TestMaxBackupsWithOrder", t)
 	defer os.RemoveAll(dir)
 
@@ -408,15 +402,12 @@ func TestMaxBackupsWithOrder(t *testing.T) {
 	existsWithContent(filename, b, t)
 	fileCount(dir, 1, t)
 
-	newFakeTime()
-
 	// this will put us over the max
 	b2 := []byte("foooooo!")
 	n, err = l.Write(b2)
 	isNil(err, t)
 	equals(len(b2), n, t)
 
-	// this will use the new fake time
 	secondFilename := backupFileWithOrder(dir, 1)
 	existsWithContent(secondFilename, b, t)
 
@@ -425,23 +416,15 @@ func TestMaxBackupsWithOrder(t *testing.T) {
 
 	fileCount(dir, 2, t)
 
-	newFakeTime()
-
 	// this will make us rotate again
 	b3 := []byte("baaaaaar!")
 	n, err = l.Write(b3)
 	isNil(err, t)
 	equals(len(b3), n, t)
 
-	// this will use the new fake time
 	thirdFilename := backupFileWithOrder(dir, 2)
 	existsWithContent(thirdFilename, b2, t)
-
 	existsWithContent(filename, b3, t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(time.Millisecond * 10)
 
 	// should only have two files in the dir still
 	fileCount(dir, 2, t)
@@ -454,8 +437,6 @@ func TestMaxBackupsWithOrder(t *testing.T) {
 
 	// now test that we don't delete directories or non-logfile files
 
-	newFakeTime()
-
 	// create a file that is close to but different from the logfile name.
 	// It shouldn't get caught by our deletion filters.
 	notlogfile := logFile(dir) + ".4.foo"
@@ -467,8 +448,6 @@ func TestMaxBackupsWithOrder(t *testing.T) {
 	notlogfiledir := backupFileWithOrder(dir, 4)
 	err = os.Mkdir(notlogfiledir, 0700)
 	isNil(err, t)
-
-	newFakeTime()
 
 	// this will use the new fake time
 	fourthFilename := backupFileWithOrder(dir, 3)
@@ -488,10 +467,6 @@ func TestMaxBackupsWithOrder(t *testing.T) {
 
 	existsWithContent(fourthFilename, b3, t)
 	existsWithContent(fourthFilename+compressSuffix, []byte("compress"), t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(time.Millisecond * 10)
 
 	// We should have four things in the directory now - the 2 log files, the
 	// not log file, and the directory
@@ -559,10 +534,6 @@ func TestCleanupExistingBackupsWithTime(t *testing.T) {
 	isNil(err, t)
 	equals(len(b2), n, t)
 
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(time.Millisecond * 10)
-
 	// now we should only have 2 files left - the primary and one backup
 	fileCount(dir, 2, t)
 }
@@ -570,7 +541,7 @@ func TestCleanupExistingBackupsWithTime(t *testing.T) {
 func TestCleanupExistingBackupsWithOrder(t *testing.T) {
 	// test that if we start with more backup files than we're supposed to have
 	// in total, that extra ones get cleaned up when we rotate.
-	currentTime = fakeTime
+	currentTime = time.Now
 
 	dir := makeTempDir("TestCleanupExistingBackupsWithOrder", t)
 	defer os.RemoveAll(dir)
@@ -582,13 +553,9 @@ func TestCleanupExistingBackupsWithOrder(t *testing.T) {
 	err := os.WriteFile(backup, data, 0644)
 	isNil(err, t)
 
-	newFakeTime()
-
 	backup = backupFileWithOrder(dir, 2)
 	err = os.WriteFile(backup+compressSuffix, data, 0644)
 	isNil(err, t)
-
-	newFakeTime()
 
 	backup = backupFileWithOrder(dir, 3)
 	err = os.WriteFile(backup, data, 0644)
@@ -606,16 +573,10 @@ func TestCleanupExistingBackupsWithOrder(t *testing.T) {
 	}
 	defer l.Close()
 
-	newFakeTime()
-
 	b2 := []byte("foooooo!")
 	n, err := l.Write(b2)
 	isNil(err, t)
 	equals(len(b2), n, t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(time.Millisecond * 10)
 
 	// now we should only have 2 files left - the primary and one backup
 	fileCount(dir, 2, t)
@@ -652,10 +613,6 @@ func TestMaxAgeOfBackupsWithTime(t *testing.T) {
 	equals(len(b2), n, t)
 	existsWithContent(backupFileWithTime(dir, backupTimeFormat), b, t)
 
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(10 * time.Millisecond)
-
 	// We should still have 2 log files, since the most recent backup was just
 	// created.
 	fileCount(dir, 2, t)
@@ -673,10 +630,6 @@ func TestMaxAgeOfBackupsWithTime(t *testing.T) {
 	isNil(err, t)
 	equals(len(b3), n, t)
 	existsWithContent(backupFileWithTime(dir, backupTimeFormat), b2, t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(10 * time.Millisecond)
 
 	// We should have 2 log files - the main log file, and the most recent
 	// backup.  The earlier backup is past the cutoff and should be gone.
@@ -816,10 +769,6 @@ func TestRotateBackupsWithTime(t *testing.T) {
 	err = l.Rotate()
 	isNil(err, t)
 
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(10 * time.Millisecond)
-
 	filename2 := backupFileWithTime(dir, backupTimeFormat)
 	existsWithContent(filename2, b, t)
 	existsWithContent(filename, []byte{}, t)
@@ -828,10 +777,6 @@ func TestRotateBackupsWithTime(t *testing.T) {
 
 	err = l.Rotate()
 	isNil(err, t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(10 * time.Millisecond)
 
 	filename3 := backupFileWithTime(dir, backupTimeFormat)
 	existsWithContent(filename3, []byte{}, t)
@@ -848,7 +793,7 @@ func TestRotateBackupsWithTime(t *testing.T) {
 }
 
 func TestRotateBackupsWithOrder(t *testing.T) {
-	currentTime = fakeTime
+	currentTime = time.Now
 	dir := makeTempDir(identifier(t), t)
 	defer os.RemoveAll(dir)
 
@@ -868,27 +813,16 @@ func TestRotateBackupsWithOrder(t *testing.T) {
 	existsWithContent(filename, b, t)
 	fileCount(dir, 1, t)
 
-	newFakeTime()
-
 	err = l.Rotate()
 	isNil(err, t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(10 * time.Millisecond)
 
 	filename2 := backupFileWithOrder(dir, 1)
 	existsWithContent(filename2, b, t)
 	existsWithContent(filename, []byte{}, t)
 	fileCount(dir, 2, t)
-	newFakeTime()
 
 	err = l.Rotate()
 	isNil(err, t)
-
-	// we need to wait a little bit since the files get deleted on a different
-	// goroutine.
-	<-time.After(10 * time.Millisecond)
 
 	filename3 := backupFileWithOrder(dir, 2)
 	existsWithContent(filename3, []byte{}, t)
@@ -935,10 +869,6 @@ func TestCompressBackupsWithTimeOnRotate(t *testing.T) {
 	// nothing in it.
 	existsWithContent(filename, []byte{}, t)
 
-	// we need to wait a little bit since the files get compressed on a different
-	// goroutine.
-	<-time.After(300 * time.Millisecond)
-
 	// a compressed version of the log file should now exist and the original
 	// should have been removed.
 	bc := new(bytes.Buffer)
@@ -954,8 +884,7 @@ func TestCompressBackupsWithTimeOnRotate(t *testing.T) {
 }
 
 func TestCompressBackupsWithOrderOnRotate(t *testing.T) {
-	currentTime = fakeTime
-
+	currentTime = time.Now
 	dir := makeTempDir(identifier(t), t)
 	defer os.RemoveAll(dir)
 
@@ -974,18 +903,12 @@ func TestCompressBackupsWithOrderOnRotate(t *testing.T) {
 	existsWithContent(filename, b, t)
 	fileCount(dir, 1, t)
 
-	newFakeTime()
-
 	err = l.Rotate()
 	isNil(err, t)
 
 	// the old logfile should be moved aside and the main logfile should have
 	// nothing in it.
 	existsWithContent(filename, []byte{}, t)
-
-	// we need to wait a little bit since the files get compressed on a different
-	// goroutine.
-	<-time.After(300 * time.Millisecond)
 
 	// a compressed version of the log file should now exist and the original
 	// should have been removed.

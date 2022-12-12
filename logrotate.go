@@ -33,9 +33,10 @@ var _ io.WriteCloser = (*Logger)(nil)
 // Logger opens or creates the logfile on first Write.  If the file exists and
 // is less than MaxBytes, logrotate will open and append to that file.
 // If the file exists and its size is >= MaxBytes, the file is renamed
-// by putting an incremental number after the file's extension or at the end
-// of the filename if there's no extension. A new log file is then created using
-// original filename.
+// by putting an incremental number after the file's extension or
+// the current time in a timestamp in the name immediately before the
+// file's extension (or the end of the filename if there's no extension).
+// A new log file is then created using original filename.
 //
 // Whenever a write would cause the current log file exceed MaxBytes,
 // the current file is closed, renamed, and a new log file created with the
@@ -105,9 +106,6 @@ type Logger struct {
 	size int64
 	file *os.File
 	mu   sync.Mutex
-
-	millCh    chan bool
-	startMill sync.Once
 }
 
 var (
@@ -125,15 +123,16 @@ var (
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
 // than MaxBytes, the file is closed, renamed and a new log file is created using the original log file name.
-// If the length of the write is greater than MaxBytes, MaxBytes is set to unlimited.
+// If the length of the write is greater than MaxBytes, an error is returned.
 func (l *Logger) Write(p []byte) (n int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	writeLen := int64(len(p))
 	if writeLen > l.max(writeLen) {
-		// MaxBytes is set to unlimited
-		l.MaxBytes = -1
+		return 0, fmt.Errorf(
+			"write length %d exceeds maximum file size %d", writeLen, l.max(writeLen),
+		)
 	}
 
 	if l.file == nil {
@@ -192,7 +191,9 @@ func (l *Logger) rotate() error {
 	if err := l.openNew(); err != nil {
 		return err
 	}
-	l.mill()
+	if err := l.millRun(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -272,7 +273,7 @@ func (l *Logger) backupName(name, nameTimeFormat string, local bool) (string, er
 // would not put it over MaxBytes.  If there is no such file or the write would
 // put it over the MaxBytes, a new file is created.
 func (l *Logger) openExistingOrNew(writeLen int) error {
-	l.mill()
+	l.millRun()
 
 	filename := l.filename()
 	info, err := osStat(filename)
@@ -307,11 +308,11 @@ func (l *Logger) filename() string {
 	return filepath.Join(os.TempDir(), name)
 }
 
-// millRunOnce performs compression and removal of stale log files.
+// millRun performs post-rotation compression and removal of stale log files,
 // Log files are compressed if enabled via configuration and old log
 // files are removed, keeping at most l.MaxBackups files, as long as
 // none of them are older than MaxAge.
-func (l *Logger) millRunOnce() error {
+func (l *Logger) millRun() error {
 	if l.MaxBackups == 0 && l.MaxAge == 0 && !l.Compress {
 		return nil
 	}
@@ -377,28 +378,6 @@ func (l *Logger) millRunOnce() error {
 	}
 
 	return err
-}
-
-// millRun runs in a goroutine to manage post-rotation compression and removal
-// of old log files.
-func (l *Logger) millRun() {
-	for range l.millCh {
-		// what am I going to do, log this?
-		_ = l.millRunOnce()
-	}
-}
-
-// mill performs post-rotation compression and removal of stale log files,
-// starting the mill goroutine if necessary.
-func (l *Logger) mill() {
-	l.startMill.Do(func() {
-		l.millCh = make(chan bool, 1)
-		go l.millRun()
-	})
-	select {
-	case l.millCh <- true:
-	default:
-	}
 }
 
 // oldLogFiles returns the list of backup log files stored in the same
