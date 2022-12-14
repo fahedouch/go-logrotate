@@ -71,7 +71,6 @@ func isNilUp(obtained interface{}, t testing.TB, caller int) {
 }
 
 // notNil reports a failure if the given value is nil.
-// nolint: deadcode
 func notNil(obtained interface{}, t testing.TB) {
 	notNilUp(obtained, t, 1)
 }
