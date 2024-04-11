@@ -801,7 +801,7 @@ func TestRotateBackupsWithOrder(t *testing.T) {
 
 	l := &Logger{
 		Filename:   filename,
-		MaxBackups: 1,
+		MaxBackups: 3,
 		MaxBytes:   100, // bytes
 	}
 	defer l.Close()
@@ -816,18 +816,19 @@ func TestRotateBackupsWithOrder(t *testing.T) {
 	err = l.Rotate()
 	isNil(err, t)
 
-	filename2 := backupFileWithOrder(dir, 1)
-	existsWithContent(filename2, b, t)
+	filename1 := backupFileWithOrder(dir, 1)
+	existsWithContent(filename1, b, t)
 	existsWithContent(filename, []byte{}, t)
 	fileCount(dir, 2, t)
 
 	err = l.Rotate()
 	isNil(err, t)
 
-	filename3 := backupFileWithOrder(dir, 2)
-	existsWithContent(filename3, []byte{}, t)
+	filename2 := backupFileWithOrder(dir, 2)
+	existsWithContent(filename1, b, t)
+	existsWithContent(filename2, []byte{}, t)
 	existsWithContent(filename, []byte{}, t)
-	fileCount(dir, 2, t)
+	fileCount(dir, 3, t)
 
 	b2 := []byte("foooooo!")
 	n, err = l.Write(b2)
