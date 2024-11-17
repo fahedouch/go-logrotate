@@ -39,3 +39,16 @@ jobs:
         fetch-depth: 1
     - name: "Run unit tests"
       run: go test -v .
+
+  test-unit-freebsd:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 1
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y go
+          run: go test -v .
