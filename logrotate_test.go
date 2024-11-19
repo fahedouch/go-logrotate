@@ -78,6 +78,44 @@ func TestOpenExisting(t *testing.T) {
 	fileCount(dir, 1, t)
 }
 
+func TestOpenExistingOrNew(t *testing.T) {
+	dir := makeTempDir("TestOpenExistingOrNew", t)
+	defer os.RemoveAll(dir)
+
+	filename := logFile(dir)
+	l := &Logger{
+		Filename: filename,
+		MaxBytes: 100,
+	}
+
+	// File doesn't exist
+	err := l.openExistingOrNew()
+	isNil(err, t)
+	assert(l.file != nil, t, "Expected file to be opened")
+	equals(int64(0), l.size, t)
+
+	content := []byte("Hello, World!")
+	_, err = l.file.Write(content)
+	isNil(err, t)
+	l.size = int64(len(content))
+
+	// Close
+	err = l.file.Close()
+	isNil(err, t)
+	l.file = nil
+
+	// File exists and is not over MaxBytes
+	err = l.openExistingOrNew()
+	isNil(err, t)
+	assert(l.file != nil, t, "Expected file to be opened")
+	equals(int64(len(content)), l.size, t)
+
+	// Close
+	err = l.file.Close()
+	isNil(err, t)
+	l.file = nil
+}
+
 func TestWriteTooLong(t *testing.T) {
 	currentTime = fakeTime
 	dir := makeTempDir("TestWriteTooLong", t)

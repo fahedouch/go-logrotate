@@ -269,9 +269,8 @@ func (l *Logger) backupName(name, nameTimeFormat string, local bool) (string, er
 	return filepath.Join(dir, filename), nil
 }
 
-// openExistingOrNew opens the logfile if it exists and if the current write
-// would not put it over MaxBytes.  If there is no such file or the write would
-// put it over the MaxBytes, a new file is created.
+// openExistingOrNew opens the logfile if it exists.
+// If there is no such file a new file is created.
 func (l *Logger) openExistingOrNew() error {
 	l.millRun()
 
