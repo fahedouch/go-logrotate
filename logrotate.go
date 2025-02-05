@@ -136,7 +136,7 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 	}
 
 	if l.file == nil {
-		if err = l.openExistingOrNew(len(p)); err != nil {
+		if err = l.openExistingOrNew(); err != nil {
 			return 0, err
 		}
 	}
@@ -269,10 +269,9 @@ func (l *Logger) backupName(name, nameTimeFormat string, local bool) (string, er
 	return filepath.Join(dir, filename), nil
 }
 
-// openExistingOrNew opens the logfile if it exists and if the current write
-// would not put it over MaxBytes.  If there is no such file or the write would
-// put it over the MaxBytes, a new file is created.
-func (l *Logger) openExistingOrNew(writeLen int) error {
+// openExistingOrNew opens the logfile if it exists.
+// If there is no such file a new file is created.
+func (l *Logger) openExistingOrNew() error {
 	l.millRun()
 
 	filename := l.filename()
@@ -282,10 +281,6 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 	}
 	if err != nil {
 		return fmt.Errorf("error getting log file info: %s", err)
-	}
-
-	if info.Size()+int64(writeLen) >= l.max(int64(writeLen)) {
-		return l.rotate()
 	}
 
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0644)
